@@ -26,6 +26,9 @@ from geopy.exc import GeocoderTimedOut
 import argparse
 from mullvad_coordinates import get_coordinates
 import random
+from rich.console import Console
+from rich.table import Table
+from rich import box
 
 MAX_SERVERS_TO_TEST = 20
 DEFAULT_LOCATION = "Lijiang, Yunnan, China"
@@ -490,9 +493,90 @@ class MullvadTester:
                     f.write("=" * 80 + "\n\n")
 
         if self.results:
+            self._print_tui_table()
             self._print_summary(results_file)
         else:
             logger.error("No test results available to generate summary")
+
+    def _print_tui_table(self):
+        """Print a rich terminal table of all test results."""
+        console = Console()
+
+        table = Table(
+            title="Mullvad VPN Server Performance Results",
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold cyan",
+            border_style="bright_black",
+            row_styles=["", "dim"],
+        )
+
+        table.add_column("Server", style="bold white", no_wrap=True)
+        table.add_column("City", style="yellow")
+        table.add_column("Country", style="yellow")
+        table.add_column("Dist\n(km)", justify="right", style="blue")
+        table.add_column("Download\n(Mbps)", justify="right")
+        table.add_column("Upload\n(Mbps)", justify="right")
+        table.add_column("Ping\n(ms)", justify="right")
+        table.add_column("MTR\nLatency", justify="right")
+        table.add_column("Pkt\nLoss%", justify="right")
+        table.add_column("Hops", justify="right")
+
+        tested = [
+            s
+            for s in self.servers
+            if s.hostname in self.results and s.connection_status == "connected"
+        ]
+        tested.sort(
+            key=lambda s: self.results[s.hostname][0].download_speed, reverse=True
+        )
+
+        for server in tested:
+            speed, mtr = self.results[server.hostname]
+
+            dl = speed.download_speed
+            if dl >= 50:
+                dl_style = "bright_green"
+            elif dl >= 20:
+                dl_style = "green"
+            elif dl >= 5:
+                dl_style = "yellow"
+            else:
+                dl_style = "red"
+
+            lat = mtr.avg_latency
+            if lat <= 0:
+                lat_str = "[dim]N/A[/dim]"
+            elif lat <= 50:
+                lat_str = f"[bright_green]{lat:.1f}[/bright_green]"
+            elif lat <= 150:
+                lat_str = f"[yellow]{lat:.1f}[/yellow]"
+            else:
+                lat_str = f"[red]{lat:.1f}[/red]"
+
+            total_loss = speed.packet_loss + mtr.packet_loss
+            loss_style = (
+                "bright_green"
+                if total_loss == 0
+                else ("yellow" if total_loss < 5 else "red")
+            )
+
+            table.add_row(
+                server.hostname,
+                server.city,
+                server.country,
+                f"{server.distance_km:.0f}",
+                f"[{dl_style}]{dl:.1f}[/{dl_style}]",
+                f"{speed.upload_speed:.1f}",
+                f"{speed.ping:.1f}",
+                lat_str,
+                f"[{loss_style}]{total_loss:.1f}[/{loss_style}]",
+                str(mtr.hops),
+            )
+
+        console.print()
+        console.print(table)
+        console.print()
 
     def _print_summary(self, results_file: str):
         """Print a summary of the best performing servers."""

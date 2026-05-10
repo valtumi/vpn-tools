@@ -1,4 +1,5 @@
 # Core dependencies
+rich>=13.0.0            # For TUI terminal table output
 speedtest-cli>=2.1.3    # For network speed testing
 geopy>=2.4.1           # For geocoding and distance calculations
 
