@@ -232,14 +232,14 @@ class MullvadTester:
 
                 # Parse server
                 server_match = re.match(
-                    r"^\s*([a-z]{2}-[a-z]+-(?:wg|ovpn)-\d+)\s+\(([^,]+)(?:,\s*([^)]+))?\)\s+-\s+([^,]+)(?:,\s+hosted by ([^()]+))?\s+\(([^)]+)\)$",
+                    r"^\s*([a-z]{2}-[a-z]+-(wg|ovpn)-\d+)\s+\(([^,]+)(?:,\s*([^)]+))?\)\s+-\s+([^,]+)(?:,\s+hosted by ([^()]+))?\s+\(([^)]+)\)$",
                     line,
                 )
                 if server_match:
                     hostname = server_match.group(1)
-                    ip = server_match.group(2)
-                    ipv6 = server_match.group(3) if server_match.group(3) else ""
-                    protocol = server_match.group(4)
+                    protocol = server_match.group(2)
+                    ip = server_match.group(3)
+                    ipv6 = server_match.group(4) if server_match.group(4) else ""
                     provider = server_match.group(5) if server_match.group(5) else ""
                     ownership = server_match.group(6)
 
@@ -426,18 +426,23 @@ class MullvadTester:
         """Run tests on all servers or up to max_servers."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = f"mullvad_test_results_{timestamp}_{protocol.lower()}.log"
+        if protocol == "WireGuard":
+            protocol = "wg"
+        else:
+            protocol = "ovpn"
 
         filtered_servers = [
             s for s in self.servers if protocol.lower() in s.protocol.lower()
         ]
+
+        if max_servers:
+            filtered_servers = filtered_servers[:max_servers]
+
         if RANDOM_SELECTION:
             random.shuffle(filtered_servers)
         if not filtered_servers:
             logger.error(f"No servers found for protocol: {protocol}")
             return
-
-        if max_servers:
-            filtered_servers = filtered_servers[:max_servers]
 
         logger.info(
             f"Starting tests on {len(filtered_servers)} servers with protocol {protocol}"
@@ -709,4 +714,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
