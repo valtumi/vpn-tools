@@ -3,9 +3,12 @@
 from datetime import datetime, UTC
 import speedtest
 
+
 # Monkey patch speedtest-cli's timestamp generation
 def patched_timestamp(self):
     return f"{datetime.now(UTC).isoformat()}Z"
+
+
 speedtest.Speedtest.timestamp = property(patched_timestamp)
 
 import subprocess
@@ -23,6 +26,9 @@ from geopy.exc import GeocoderTimedOut
 import argparse
 from mullvad_coordinates import get_coordinates
 import random
+from rich.console import Console
+from rich.table import Table
+from rich import box
 
 MAX_SERVERS_TO_TEST = 20
 DEFAULT_LOCATION = "Lijiang, Yunnan, China"
@@ -34,13 +40,14 @@ MAX_CONNECTION_TIMEOUT = 60
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('mullvad_speed_test.log')
-    ]
+        logging.FileHandler("mullvad_speed_test.log"),
+    ],
 )
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ServerInfo:
@@ -58,22 +65,27 @@ class ServerInfo:
     longitude: float = 0.0
     distance_km: float = 0.0  # Distance from reference location
 
+
 @dataclass
 class SpeedTestResult:
     download_speed: float  # Mbps
-    upload_speed: float    # Mbps
-    ping: float           # ms
-    jitter: float         # ms
-    packet_loss: float    # percentage
+    upload_speed: float  # Mbps
+    ping: float  # ms
+    jitter: float  # ms
+    packet_loss: float  # percentage
+
 
 @dataclass
 class MtrResult:
-    avg_latency: float    # ms
-    packet_loss: float    # percentage
+    avg_latency: float  # ms
+    packet_loss: float  # percentage
     hops: int
 
+
 class MullvadTester:
-    def __init__(self, target_host: str = "8.8.8.8", reference_location: str = DEFAULT_LOCATION):
+    def __init__(
+        self, target_host: str = "8.8.8.8", reference_location: str = DEFAULT_LOCATION
+    ):
         self.target_host = target_host
         self.reference_location = reference_location
         self.reference_coords = self._get_location_coordinates(reference_location)
@@ -82,11 +94,15 @@ class MullvadTester:
         self.max_connection_timeout = MAX_CONNECTION_TIMEOUT  # in seconds
 
         if not self.servers:
-            logger.error("No Mullvad servers found. Please check if Mullvad is installed and accessible.")
+            logger.error(
+                "No Mullvad servers found. Please check if Mullvad is installed and accessible."
+            )
             sys.exit(1)
 
         logger.info(f"Found {len(self.servers)} Mullvad servers")
-        logger.info(f"Reference location: {reference_location} ({self.reference_coords})")
+        logger.info(
+            f"Reference location: {reference_location} ({self.reference_coords})"
+        )
 
     def _get_location_coordinates(self, location: str) -> Tuple[float, float]:
         """Get coordinates for a location using geocoding."""
@@ -101,18 +117,24 @@ class MullvadTester:
                 logger.info(f"Full location data: {location_data.address}")
                 return coords
             else:
-                logger.error(f"Could not find coordinates for {location}, using default Lijiang coordinates")
+                logger.error(
+                    f"Could not find coordinates for {location}, using default Lijiang coordinates"
+                )
                 if location.lower().startswith("lijiang"):
                     return LIJIANG_COORDS
                 else:
-                    logger.error("Please verify your location string or use a more specific location")
+                    logger.error(
+                        "Please verify your location string or use a more specific location"
+                    )
                     sys.exit(1)
         except (GeocoderTimedOut, Exception) as e:
             logger.error(f"Error getting coordinates for {location}: {e}")
             if location.lower().startswith("lijiang"):
                 return LIJIANG_COORDS
             else:
-                logger.error("Please verify your location string or use a more specific location")
+                logger.error(
+                    "Please verify your location string or use a more specific location"
+                )
                 sys.exit(1)
 
     def _extract_coordinates(self, line: str) -> Tuple[float, float]:
@@ -121,12 +143,18 @@ class MullvadTester:
         logger.debug(f"Extracting coordinates from line: '{line}'")
 
         # Look for coordinates with optional negative signs
-        coords_match = re.search(r'@\s*([-]?\d+\.?\d*)°([NS]),\s*([-]?\d+\.?\d*)°([EW])', line)
+        coords_match = re.search(
+            r"@\s*([-]?\d+\.?\d*)°([NS]),\s*([-]?\d+\.?\d*)°([EW])", line
+        )
         if coords_match:
             # Log the matched groups
             logger.debug(f"Raw matches:")
-            logger.debug(f"  Latitude: '{coords_match.group(1)}' '{coords_match.group(2)}'")
-            logger.debug(f"  Longitude: '{coords_match.group(3)}' '{coords_match.group(4)}'")
+            logger.debug(
+                f"  Latitude: '{coords_match.group(1)}' '{coords_match.group(2)}'"
+            )
+            logger.debug(
+                f"  Longitude: '{coords_match.group(3)}' '{coords_match.group(4)}'"
+            )
 
             # Extract latitude - if it's negative, it's actually Southern hemisphere
             lat = float(coords_match.group(1))
@@ -135,17 +163,17 @@ class MullvadTester:
                 lat = lat  # Keep it negative
             else:
                 # Use the hemisphere marker only for positive latitudes
-                lat = lat if coords_match.group(2) == 'N' else -lat
+                lat = lat if coords_match.group(2) == "N" else -lat
             logger.debug(f"Processed latitude: {lat}")
 
             # Extract longitude
             lon = float(coords_match.group(3))
             # For Australian cities (which have negative latitude), assume East longitude
-            if lat < 0 and 'au-' in line.lower():
+            if lat < 0 and "au-" in line.lower():
                 lon = abs(lon)  # Force positive for Australian cities
             else:
                 # Normal handling for other locations
-                lon = lon if coords_match.group(4) == 'E' else -lon
+                lon = lon if coords_match.group(4) == "E" else -lon
 
             logger.debug(f"Final longitude: {lon}")
             logger.debug(f"Final coordinates: ({lat}, {lon})")
@@ -157,7 +185,7 @@ class MullvadTester:
     def _calculate_distance(self, server_coords: Tuple[float, float]) -> float:
         """Calculate distance between server and reference location."""
         if server_coords == (0.0, 0.0) or self.reference_coords == (0.0, 0.0):
-            return float('inf')
+            return float("inf")
 
         distance = geodesic(self.reference_coords, server_coords).kilometers
         logger.debug(f"Distance calculation:")
@@ -178,7 +206,7 @@ class MullvadTester:
             current_country = ""
             current_city = ""
 
-            for line in output.split('\n'):
+            for line in output.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
@@ -186,14 +214,17 @@ class MullvadTester:
                 logger.debug(f"Processing line: {line}")
 
                 # Parse country
-                country_match = re.match(r'^([A-Za-z\s]+)\s+\(([a-z]{2})\)$', line)
+                country_match = re.match(r"^([A-Za-z\s]+)\s+\(([a-z]{2})\)$", line)
                 if country_match:
                     current_country = country_match.group(1)
                     logger.debug(f"Found country: {current_country}")
                     continue
 
                 # Parse city
-                city_match = re.match(r'^\s*([A-Za-z\s,]+)\s+\([a-z]+\)\s+@\s+[-\d.]+°[NS],\s+[-\d.]+°[EW]$', line)
+                city_match = re.match(
+                    r"^\s*([A-Za-z\s,]+)\s+\([a-z]+\)\s+@\s+[-\d.]+°[NS],\s+[-\d.]+°[EW]$",
+                    line,
+                )
                 if city_match:
                     current_city = city_match.group(1)
                     logger.debug(f"Found city: {current_city}")
@@ -203,35 +234,42 @@ class MullvadTester:
                     continue
 
                 # Parse server
-                server_match = re.match(r'^\s*([a-z]{2}-[a-z]+-(?:wg|ovpn)-\d+)\s+\(([^,]+)(?:,\s*([^)]+))?\)\s+-\s+([^,]+)(?:,\s+hosted by ([^()]+))?\s+\(([^)]+)\)$', line)
+                server_match = re.match(
+                    r"^\s*([a-z]{2}-[a-z]+-(wg|ovpn)-\d+)\s+\(([^,]+)(?:,\s*([^)]+))?\)\s+-\s+([^,]+)(?:,\s+hosted by ([^()]+))?\s+\(([^)]+)\)$",
+                    line,
+                )
                 if server_match:
                     hostname = server_match.group(1)
-                    ip = server_match.group(2)
-                    ipv6 = server_match.group(3) if server_match.group(3) else ""
-                    protocol = server_match.group(4)
+                    protocol = server_match.group(2)
+                    ip = server_match.group(3)
+                    ipv6 = server_match.group(4) if server_match.group(4) else ""
                     provider = server_match.group(5) if server_match.group(5) else ""
                     ownership = server_match.group(6)
 
                     # Calculate distance from reference location
                     distance = self._calculate_distance(current_coords)
 
-                    logger.debug(f"Found server: {hostname} ({ip}) at {current_city}, {current_country}")
+                    logger.debug(
+                        f"Found server: {hostname} ({ip}) at {current_city}, {current_country}"
+                    )
                     logger.debug(f"  Coordinates: {current_coords}")
                     logger.debug(f"  Distance: {distance:.2f} km")
 
-                    servers.append(ServerInfo(
-                        country=current_country,
-                        city=current_city,
-                        hostname=hostname,
-                        protocol=protocol,
-                        provider=provider,
-                        ownership=ownership,
-                        ip=ip,
-                        ipv6=ipv6,
-                        latitude=current_coords[0],
-                        longitude=current_coords[1],
-                        distance_km=distance
-                    ))
+                    servers.append(
+                        ServerInfo(
+                            country=current_country,
+                            city=current_city,
+                            hostname=hostname,
+                            protocol=protocol,
+                            provider=provider,
+                            ownership=ownership,
+                            ip=ip,
+                            ipv6=ipv6,
+                            latitude=current_coords[0],
+                            longitude=current_coords[1],
+                            distance_km=distance,
+                        )
+                    )
                 else:
                     logger.debug(f"Line did not match server pattern: {line}")
 
@@ -240,13 +278,19 @@ class MullvadTester:
 
             # Log sorted servers with locations and distances
             logger.debug("\nSorted servers by distance from reference point:")
-            logger.debug(f"Reference: {self.reference_location} at {self.reference_coords}")
+            logger.debug(
+                f"Reference: {self.reference_location} at {self.reference_coords}"
+            )
             logger.debug("-" * 60)
             for server in servers:
-                logger.debug(f"{server.city}, {server.country}: {server.distance_km:.0f} km ({server.latitude:.4f}, {server.longitude:.4f})")
+                logger.debug(
+                    f"{server.city}, {server.country}: {server.distance_km:.0f} km ({server.latitude:.4f}, {server.longitude:.4f})"
+                )
             logger.debug("-" * 60)
 
-            logger.info(f"Successfully parsed and sorted {len(servers)} servers by distance")
+            logger.info(
+                f"Successfully parsed and sorted {len(servers)} servers by distance"
+            )
             return servers
         except subprocess.CalledProcessError as e:
             logger.error(f"Error getting server list: {e}")
@@ -263,19 +307,21 @@ class MullvadTester:
             s = speedtest.Speedtest()
             s.get_best_server()
             download_speed = s.download() / 1_000_000  # Convert to Mbps
-            upload_speed = s.upload() / 1_000_000      # Convert to Mbps
+            upload_speed = s.upload() / 1_000_000  # Convert to Mbps
             results = s.results.dict()
 
             result = SpeedTestResult(
                 download_speed=download_speed,
                 upload_speed=upload_speed,
-                ping=results['ping'],
-                jitter=results.get('jitter', 0),
-                packet_loss=results.get('packetLoss', 0)
+                ping=results["ping"],
+                jitter=results.get("jitter", 0),
+                packet_loss=results.get("packetLoss", 0),
             )
 
-            logger.info(f"Speedtest results - Download: {result.download_speed:.2f} Mbps, "
-                       f"Upload: {result.upload_speed:.2f} Mbps, Ping: {result.ping:.2f} ms")
+            logger.info(
+                f"Speedtest results - Download: {result.download_speed:.2f} Mbps, "
+                f"Upload: {result.upload_speed:.2f} Mbps, Ping: {result.ping:.2f} ms"
+            )
             return result
 
         except Exception as e:
@@ -289,21 +335,23 @@ class MullvadTester:
             output = subprocess.check_output(
                 ["sudo", "mtr", "-n", "-c", "20", "-r", self.target_host],
                 text=True,
-                timeout=60
+                timeout=60,
             )
 
-            lines = output.strip().split('\n')[1:]  # Skip header
+            lines = output.strip().split("\n")[1:]  # Skip header
             if not lines:
                 logger.warning("No MTR results received")
                 return MtrResult(0, 100, 0)
 
             last_hop = lines[-1].split()
             avg_latency = float(last_hop[7])  # Average latency
-            packet_loss = float(last_hop[2].rstrip('%'))  # Loss%
+            packet_loss = float(last_hop[2].rstrip("%"))  # Loss%
             hops = len(lines)
 
-            logger.info(f"MTR results - Latency: {avg_latency:.2f} ms, "
-                       f"Packet Loss: {packet_loss:.2f}%, Hops: {hops}")
+            logger.info(
+                f"MTR results - Latency: {avg_latency:.2f} ms, "
+                f"Packet Loss: {packet_loss:.2f}%, Hops: {hops}"
+            )
             return MtrResult(avg_latency, packet_loss, hops)
 
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -317,14 +365,16 @@ class MullvadTester:
     def connect_to_server(self, server: ServerInfo) -> bool:
         """Connect to a specific Mullvad server."""
         try:
-            logger.info(f"Connecting to server {server.hostname} ({server.city}, {server.country})...")
+            logger.info(
+                f"Connecting to server {server.hostname} ({server.city}, {server.country})..."
+            )
 
             connection_start_time = time.time()
 
             # Set the relay
-            subprocess.run([
-                "mullvad", "relay", "set", "location", server.hostname
-            ], check=True)
+            subprocess.run(
+                ["mullvad", "relay", "set", "location", server.hostname], check=True
+            )
 
             # Connect
             subprocess.run(["mullvad", "connect"], check=True)
@@ -339,13 +389,17 @@ class MullvadTester:
                 if "Connected" in output:
                     server.connection_time = time.time() - connection_start_time
                     server.connection_status = "connected"
-                    logger.info(f"Successfully connected to server in {server.connection_time:.2f} seconds")
+                    logger.info(
+                        f"Successfully connected to server in {server.connection_time:.2f} seconds"
+                    )
                     return True
 
                 time.sleep(poll_interval)
                 elapsed_time += poll_interval
 
-            logger.warning(f"Failed to connect to server after {self.max_connection_timeout} seconds")
+            logger.warning(
+                f"Failed to connect to server after {self.max_connection_timeout} seconds"
+            )
             server.connection_time = 0
             server.connection_status = "disconnected"
             return False
@@ -361,7 +415,9 @@ class MullvadTester:
     def test_server(self, server: ServerInfo) -> Tuple[SpeedTestResult, MtrResult]:
         """Test a single server's performance."""
         if not self.connect_to_server(server):
-            logger.warning(f"Skipping tests for {server.hostname} due to connection failure")
+            logger.warning(
+                f"Skipping tests for {server.hostname} due to connection failure"
+            )
             return SpeedTestResult(0, 0, 0, 0, 100), MtrResult(0, 100, 0)
 
         speedtest_result = self._run_speedtest()
@@ -373,20 +429,29 @@ class MullvadTester:
         """Run tests on all servers or up to max_servers."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = f"mullvad_test_results_{timestamp}_{protocol.lower()}.log"
+        if protocol == "WireGuard":
+            protocol = "wg"
+        else:
+            protocol = "ovpn"
 
-        filtered_servers = [s for s in self.servers if protocol.lower() in s.protocol.lower()]
+        filtered_servers = [
+            s for s in self.servers if protocol.lower() in s.protocol.lower()
+        ]
+
+        if max_servers:
+            filtered_servers = filtered_servers[:max_servers]
+
         if RANDOM_SELECTION:
             random.shuffle(filtered_servers)
         if not filtered_servers:
             logger.error(f"No servers found for protocol: {protocol}")
             return
 
-        if max_servers:
-            filtered_servers = filtered_servers[:max_servers]
+        logger.info(
+            f"Starting tests on {len(filtered_servers)} servers with protocol {protocol}"
+        )
 
-        logger.info(f"Starting tests on {len(filtered_servers)} servers with protocol {protocol}")
-
-        with open(results_file, 'w') as f:
+        with open(results_file, "w") as f:
             f.write("Mullvad VPN Server Performance Test Results\n")
             f.write(f"Test Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Reference Location: {self.reference_location}\n")
@@ -395,9 +460,15 @@ class MullvadTester:
             f.write("=" * 80 + "\n\n")
 
             for idx, server in enumerate(filtered_servers, 1):
-                logger.info(f"\nTesting server {idx}/{len(filtered_servers)}: {server.hostname}")
-                print(f"\nTesting server {idx}/{len(filtered_servers)}: {server.hostname}")
-                print(f"Location: {server.city}, {server.country} (Distance: {server.distance_km:.0f} km)")
+                logger.info(
+                    f"\nTesting server {idx}/{len(filtered_servers)}: {server.hostname}"
+                )
+                print(
+                    f"\nTesting server {idx}/{len(filtered_servers)}: {server.hostname}"
+                )
+                print(
+                    f"Location: {server.city}, {server.country} (Distance: {server.distance_km:.0f} km)"
+                )
 
                 speedtest_result, mtr_result = self.test_server(server)
                 self.results[server.hostname] = (speedtest_result, mtr_result)
@@ -422,9 +493,90 @@ class MullvadTester:
                     f.write("=" * 80 + "\n\n")
 
         if self.results:
+            self._print_tui_table()
             self._print_summary(results_file)
         else:
             logger.error("No test results available to generate summary")
+
+    def _print_tui_table(self):
+        """Print a rich terminal table of all test results."""
+        console = Console()
+
+        table = Table(
+            title="Mullvad VPN Server Performance Results",
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold cyan",
+            border_style="bright_black",
+            row_styles=["", "dim"],
+        )
+
+        table.add_column("Server", style="bold white", no_wrap=True)
+        table.add_column("City", style="yellow")
+        table.add_column("Country", style="yellow")
+        table.add_column("Dist\n(km)", justify="right", style="blue")
+        table.add_column("Download\n(Mbps)", justify="right")
+        table.add_column("Upload\n(Mbps)", justify="right")
+        table.add_column("Ping\n(ms)", justify="right")
+        table.add_column("MTR\nLatency", justify="right")
+        table.add_column("Pkt\nLoss%", justify="right")
+        table.add_column("Hops", justify="right")
+
+        tested = [
+            s
+            for s in self.servers
+            if s.hostname in self.results and s.connection_status == "connected"
+        ]
+        tested.sort(
+            key=lambda s: self.results[s.hostname][0].download_speed, reverse=True
+        )
+
+        for server in tested:
+            speed, mtr = self.results[server.hostname]
+
+            dl = speed.download_speed
+            if dl >= 50:
+                dl_style = "bright_green"
+            elif dl >= 20:
+                dl_style = "green"
+            elif dl >= 5:
+                dl_style = "yellow"
+            else:
+                dl_style = "red"
+
+            lat = mtr.avg_latency
+            if lat <= 0:
+                lat_str = "[dim]N/A[/dim]"
+            elif lat <= 50:
+                lat_str = f"[bright_green]{lat:.1f}[/bright_green]"
+            elif lat <= 150:
+                lat_str = f"[yellow]{lat:.1f}[/yellow]"
+            else:
+                lat_str = f"[red]{lat:.1f}[/red]"
+
+            total_loss = speed.packet_loss + mtr.packet_loss
+            loss_style = (
+                "bright_green"
+                if total_loss == 0
+                else ("yellow" if total_loss < 5 else "red")
+            )
+
+            table.add_row(
+                server.hostname,
+                server.city,
+                server.country,
+                f"{server.distance_km:.0f}",
+                f"[{dl_style}]{dl:.1f}[/{dl_style}]",
+                f"{speed.upload_speed:.1f}",
+                f"{speed.ping:.1f}",
+                lat_str,
+                f"[{loss_style}]{total_loss:.1f}[/{loss_style}]",
+                str(mtr.hops),
+            )
+
+        console.print()
+        console.print(table)
+        console.print()
 
     def _print_summary(self, results_file: str):
         """Print a summary of the best performing servers."""
@@ -435,38 +587,73 @@ class MullvadTester:
         try:
             # Sort servers by different metrics
             servers_by_distance = sorted(
-                [(s.hostname, s.distance_km) for s in self.servers if s.hostname in self.results and s.connection_status == "connected"],
-                key=lambda x: x[1]
+                [
+                    (s.hostname, s.distance_km)
+                    for s in self.servers
+                    if s.hostname in self.results and s.connection_status == "connected"
+                ],
+                key=lambda x: x[1],
             )
 
             servers_by_download = sorted(
-                [s.hostname for s in self.servers if s.hostname in self.results and s.connection_status == "connected"],
+                [
+                    s.hostname
+                    for s in self.servers
+                    if s.hostname in self.results and s.connection_status == "connected"
+                ],
                 key=lambda hostname: self.results[hostname][0].download_speed,
-                reverse=True
+                reverse=True,
             )
 
             servers_by_upload = sorted(
-                [s.hostname for s in self.servers if s.hostname in self.results and s.connection_status == "connected"],
+                [
+                    s.hostname
+                    for s in self.servers
+                    if s.hostname in self.results and s.connection_status == "connected"
+                ],
                 key=lambda hostname: self.results[hostname][0].upload_speed,
-                reverse=True
+                reverse=True,
             )
 
             servers_by_latency = sorted(
-                [s.hostname for s in self.servers if s.hostname in self.results and s.connection_status == "connected"],
-                key=lambda hostname: self.results[hostname][1].avg_latency if self.results[hostname][1].avg_latency > 0 else float('inf')
+                [
+                    s.hostname
+                    for s in self.servers
+                    if s.hostname in self.results and s.connection_status == "connected"
+                ],
+                key=lambda hostname: (
+                    self.results[hostname][1].avg_latency
+                    if self.results[hostname][1].avg_latency > 0
+                    else float("inf")
+                ),
             )
 
             servers_by_packet_loss = sorted(
-                [s.hostname for s in self.servers if s.hostname in self.results and s.connection_status == "connected"],
-                key=lambda hostname: self.results[hostname][0].packet_loss + self.results[hostname][1].packet_loss
+                [
+                    s.hostname
+                    for s in self.servers
+                    if s.hostname in self.results and s.connection_status == "connected"
+                ],
+                key=lambda hostname: (
+                    self.results[hostname][0].packet_loss
+                    + self.results[hostname][1].packet_loss
+                ),
             )
 
             servers_by_connection_time = sorted(
-                [s.hostname for s in self.servers if s.hostname in self.results and s.connection_status == "connected"],
-                key=lambda hostname: next(s.connection_time for s in self.servers if s.hostname == hostname and s.connection_time > 0)
+                [
+                    s.hostname
+                    for s in self.servers
+                    if s.hostname in self.results and s.connection_status == "connected"
+                ],
+                key=lambda hostname: next(
+                    s.connection_time
+                    for s in self.servers
+                    if s.hostname == hostname and s.connection_time > 0
+                ),
             )
 
-            with open(results_file, 'a') as f:
+            with open(results_file, "a") as f:
                 f.write("\nSUMMARY\n")
                 f.write("=" * 80 + "\n\n")
 
@@ -475,7 +662,9 @@ class MullvadTester:
                 f.write("Top Servers by Distance:\n")
                 for hostname, distance in servers_by_distance[:TOP_SERVERS_NUM]:
                     server = next(s for s in self.servers if s.hostname == hostname)
-                    f.write(f"{hostname} ({server.city}, {server.country}): {distance:.0f} km\n")
+                    f.write(
+                        f"{hostname} ({server.city}, {server.country}): {distance:.0f} km\n"
+                    )
 
                 f.write("\nTop Servers by Connection Speed:\n")
                 for hostname in servers_by_connection_time[:TOP_SERVERS_NUM]:
@@ -485,36 +674,62 @@ class MullvadTester:
 
                 f.write("\nTop Servers by Download Speed:\n")
                 for hostname in servers_by_download[:TOP_SERVERS_NUM]:
-                    f.write(f"{hostname}: {self.results[hostname][0].download_speed:.2f} Mbps\n")
+                    f.write(
+                        f"{hostname}: {self.results[hostname][0].download_speed:.2f} Mbps\n"
+                    )
 
                 f.write("\nTop Servers by Upload Speed:\n")
                 for hostname in servers_by_upload[:TOP_SERVERS_NUM]:
-                    f.write(f"{hostname}: {self.results[hostname][0].upload_speed:.2f} Mbps\n")
+                    f.write(
+                        f"{hostname}: {self.results[hostname][0].upload_speed:.2f} Mbps\n"
+                    )
 
                 f.write("\nTop Servers by Latency:\n")
                 for hostname in servers_by_latency[:TOP_SERVERS_NUM]:
-                    f.write(f"{hostname}: {self.results[hostname][1].avg_latency:.2f} ms\n")
+                    f.write(
+                        f"{hostname}: {self.results[hostname][1].avg_latency:.2f} ms\n"
+                    )
 
                 f.write("\nTop Servers by Reliability (Lowest Packet Loss):\n")
                 for hostname in servers_by_packet_loss[:TOP_SERVERS_NUM]:
-                    total_loss = self.results[hostname][0].packet_loss + self.results[hostname][1].packet_loss
+                    total_loss = (
+                        self.results[hostname][0].packet_loss
+                        + self.results[hostname][1].packet_loss
+                    )
                     f.write(f"{hostname}: {total_loss:.2f}% packet loss\n")
 
                 # Calculate averages only for servers with valid results
-                valid_results = [(s, m) for s, m in self.results.values()
-                               if s.download_speed > 0 and m.avg_latency > 0]
+                valid_results = [
+                    (s, m)
+                    for s, m in self.results.values()
+                    if s.download_speed > 0 and m.avg_latency > 0
+                ]
 
                 if valid_results:
-                    avg_download = statistics.mean(r[0].download_speed for r in valid_results)
-                    avg_upload = statistics.mean(r[0].upload_speed for r in valid_results)
-                    avg_latency = statistics.mean(r[1].avg_latency for r in valid_results)
+                    avg_download = statistics.mean(
+                        r[0].download_speed for r in valid_results
+                    )
+                    avg_upload = statistics.mean(
+                        r[0].upload_speed for r in valid_results
+                    )
+                    avg_latency = statistics.mean(
+                        r[1].avg_latency for r in valid_results
+                    )
 
                     # Calculate average connection time for successful connections
-                    successful_connections = [s.connection_time for s in self.servers if s.connection_time > 0]
-                    avg_connection_time = statistics.mean(successful_connections) if successful_connections else 0
+                    successful_connections = [
+                        s.connection_time for s in self.servers if s.connection_time > 0
+                    ]
+                    avg_connection_time = (
+                        statistics.mean(successful_connections)
+                        if successful_connections
+                        else 0
+                    )
 
                     f.write("\nOverall Statistics (excluding failed tests):\n")
-                    f.write(f"Average Connection Time: {avg_connection_time:.2f} seconds\n")
+                    f.write(
+                        f"Average Connection Time: {avg_connection_time:.2f} seconds\n"
+                    )
                     f.write(f"Average Download Speed: {avg_download:.2f} Mbps\n")
                     f.write(f"Average Upload Speed: {avg_upload:.2f} Mbps\n")
                     f.write(f"Average Latency: {avg_latency:.2f} ms\n")
@@ -524,15 +739,28 @@ class MullvadTester:
         except Exception as e:
             logger.error(f"Error generating summary: {e}")
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Test Mullvad VPN servers performance')
-    parser.add_argument('--location', type=str, default=DEFAULT_LOCATION,
-                      help=f'Reference location for distance calculation (default: {DEFAULT_LOCATION})')
-    parser.add_argument('--protocol', type=str, default="WireGuard",
-                      choices=['WireGuard', 'OpenVPN'],
-                      help='VPN protocol to test (default: WireGuard)')
-    parser.add_argument('--max-servers', type=int, default=MAX_SERVERS_TO_TEST,
-                      help=f'Maximum number of servers to test (default: {MAX_SERVERS_TO_TEST})')
+    parser = argparse.ArgumentParser(description="Test Mullvad VPN servers performance")
+    parser.add_argument(
+        "--location",
+        type=str,
+        default=DEFAULT_LOCATION,
+        help=f"Reference location for distance calculation (default: {DEFAULT_LOCATION})",
+    )
+    parser.add_argument(
+        "--protocol",
+        type=str,
+        default="WireGuard",
+        choices=["WireGuard", "OpenVPN"],
+        help="VPN protocol to test (default: WireGuard)",
+    )
+    parser.add_argument(
+        "--max-servers",
+        type=int,
+        default=MAX_SERVERS_TO_TEST,
+        help=f"Maximum number of servers to test (default: {MAX_SERVERS_TO_TEST})",
+    )
 
     args = parser.parse_args()
 
@@ -540,14 +768,18 @@ def main():
         # Check if speedtest-cli is installed
         subprocess.run(["speedtest-cli", "--version"], check=True, capture_output=True)
     except subprocess.CalledProcessError:
-        logger.error("speedtest-cli is not installed. Please install it using: pip install speedtest-cli")
+        logger.error(
+            "speedtest-cli is not installed. Please install it using: pip install speedtest-cli"
+        )
         sys.exit(1)
 
     try:
         # Check if mtr is installed
         subprocess.run(["mtr", "--version"], check=True, capture_output=True)
     except subprocess.CalledProcessError:
-        logger.error("mtr is not installed. Please install it using your package manager")
+        logger.error(
+            "mtr is not installed. Please install it using your package manager"
+        )
         sys.exit(1)
 
     try:
@@ -562,6 +794,7 @@ def main():
 
     # Run tests
     tester.run_tests(protocol=args.protocol, max_servers=args.max_servers)
+
 
 if __name__ == "__main__":
     main()
